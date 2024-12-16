@@ -1,0 +1,15 @@
+.vscode/
+.DS_Store
+.CondaPkg/
+.ipynb_checkpoints/
+*.png
+*.mp4
+*.jld2
+*.nc
+*.log
+#run*.sh
+Figures/
+Animations/
+Data/
+Logs/
+*/__pycache__

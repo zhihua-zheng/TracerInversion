@@ -1,0 +1,32 @@
+#!/bin/bash -l
+#PBS -A UMCP0036
+#PBS -N run_{0}_TI
+#PBS -o Logs/run_{0}_TI.log
+#PBS -j oe
+#PBS -l walltime=00:30:00
+#PBS -q casper
+#PBS -l select=1:ncpus=1:mem=4GB
+#PBS -M zhihua@umd.edu
+#PBS -m abe
+
+### Clear and load all the modules needed
+module --force purge
+module load ncarenv
+module load conda
+
+export TMPDIR=/glade/derecho/scratch/$USER/temp
+mkdir -p $TMPDIR
+
+### Run analysis
+proj_dir=/glade/u/home/zhihuaz/Projects/TRACE-SEAS/TracerInversion
+conda activate trace-seas
+python3 $proj_dir/Tools/invert_tracers.py -c {0}
+
+### Overwrite previous log file
+LOG=$proj_dir/Logs/{0}_TI.log
+if [ -f "$LOG" ]; then
+    rm -f $LOG
+fi
+mv $proj_dir/Logs/run_{0}_TI.log $LOG
+
+qstat -f $PBS_JOBID >> Logs/{0}_TI.log
