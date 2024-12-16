@@ -96,6 +96,14 @@ def cmod(a, b):
     return b if result == 0 else result
 
 
+def sort_tracer_gradients(G, F, invert_tracers=6):
+    G_magnitude = np.sqrt((G**2).sum(axis=-2, keepdims=True))
+    ind = np.argsort(-G_magnitude, axis=-1) # descending
+    G_sorted = np.take_along_axis(G, ind, axis=-1)
+    F_sorted = np.take_along_axis(F, ind, axis=-1)
+    return G_sorted[..., :invert_tracers], F_sorted[..., :invert_tracers]
+
+
 def main():
     # process input arguments
     parser = argparse.ArgumentParser(description="""
@@ -134,7 +142,8 @@ def main():
     #coords = {dim : periodic_coords[dim] if tpl=='P' else bounded_coords[dim] for dim, tpl in zip('xyz', 'PPN')}
     #grid = Grid(dsa, coords=coords)
 
-    subset_tracers = 6 
+    subset_tracers = 8
+    invert_tracers = 6
     add_sgs_fluxes = False
     normalize_tracers = True
     dsa_vlist = list(dsa.keys())
@@ -248,30 +257,41 @@ def main():
     dsa['⟨uᵢ′cᵅ′⟩'] = dsa['⟨uᵢ′cᵅ′⟩'].transpose(..., 'i', 'α')
     dsa['∇ⱼ⟨cᵅ⟩']   = dsa['∇ⱼ⟨cᵅ⟩'].transpose(..., 'j', 'α')
 
+    #if local_tracer_selection:
+    dsa = dsa.chunk(α=-1, β=-1, m=-1, i=-1, j=-1) if 'm' in dsa.dims else dsa.chunk(α=-1, β=-1, i=-1, j=-1)
+    dsa['∇ⱼ⟨cᵅ⟩ₛ'], dsa['⟨uᵢ′cᵅ′⟩ₛ'] = xr.apply_ufunc(sort_tracer_gradients, dsa['∇ⱼ⟨cᵅ⟩'], dsa['⟨uᵢ′cᵅ′⟩'],
+                                                      input_core_dims=[['j', 'α'], ['i', 'α']],
+                                                      output_core_dims=[['j', 'αs'], ['i', 'αs']],
+                                                      output_dtypes=[float, float],
+                                                      kwargs=dict(invert_tracers=invert_tracers),
+                                                      dask_gufunc_kwargs=dict(output_sizes={'αs': len(dsa.α[:invert_tracers])}),
+                                                      dask='parallelized')
+
     if normalize_tracers:
-        rms_mag = 1#np.sqrt((dsa['⟨uᵢ′cᵅ′⟩']**2).mean(['xC', 'zC', 'i']))
+        mask_lcf = np.sqrt((dsa['⟨uᵢ′cᵅ′⟩ₛ']**2).sum('i')) > 0.1*np.sqrt((dsa['⟨uᵢ′cᵅ′⟩ₛ']**2).sum('i')).max(['xC', 'zC'])
+        rms_mag = np.sqrt((dsa['⟨uᵢ′cᵅ′⟩ₛ']**2).sum('i').where(mask_lcf).median(['xC', 'zC']))
         #grd_mag = np.sqrt((dsa['∇ⱼ⟨cᵅ⟩']**2).sum('j'))#.median(['xC', 'zC'])
         #grd_max = grd_mag.max('α')
         #rms_mag = grd_mag/grd_max
         #mask_lcf = np.sqrt((dsa['⟨uᵢ′cᵅ′⟩']**2).sum('i')) > 0.1*np.sqrt((dsa['⟨uᵢ′cᵅ′⟩']**2).sum('i')).max(['xC', 'zC'])
         #rms_mag = np.sqrt((dsa['∇ⱼ⟨cᵅ⟩']**2).sum('j').where(mask_lcf).median(['xC', 'zC']))
-        dsa['⟨uᵢ′cᵅ′⟩|ⁿ'] = dsa['⟨uᵢ′cᵅ′⟩'] / rms_mag
-        dsa['∇ⱼ⟨cᵅ⟩|ⁿ']   = dsa['∇ⱼ⟨cᵅ⟩']   / rms_mag
+        dsa['⟨uᵢ′cᵅ′⟩|ⁿ'] = dsa['⟨uᵢ′cᵅ′⟩ₛ'] / rms_mag
+        dsa['∇ⱼ⟨cᵅ⟩|ⁿ']   = dsa['∇ⱼ⟨cᵅ⟩ₛ']   / rms_mag
 
     # invert gradient matrix using a Pseudo-Inverse algorithm
-    dsa = dsa.chunk(α=-1, β=-1, m=-1, i=-1, j=-1) if 'm' in dsa.dims else dsa.chunk(α=-1, β=-1, i=-1, j=-1)
+    dsa = dsa.chunk(αs=-1)
     dsa['∇ⱼ⟨cᵅ⟩|ⁿ ⁻¹'] = xr.apply_ufunc(pinv, dsa['∇ⱼ⟨cᵅ⟩|ⁿ'],
-                                        input_core_dims=[['j', 'α']],
-                                        output_core_dims=[['α', 'j']],
+                                        input_core_dims=[['j', 'αs']],
+                                        output_core_dims=[['αs', 'j']],
                                         #kwargs=dict(rcond=1e-9),
-                                        dask='parallelized').transpose(..., 'α', 'j')
+                                        dask='parallelized').transpose(..., 'αs', 'j')
 
     # get the transport tensor Rᵢⱼ
     # for the matrix multiplication, the shapes are:
     # (n × t) ⋅ (t × n) = (n × n)
     # (number of dimensions × number of tracers) ⋅ (number of tracers × number of dimensions)
     dsa['Rᵢⱼ'] = -xr.apply_ufunc(np.matmul, dsa['⟨uᵢ′cᵅ′⟩|ⁿ'], dsa['∇ⱼ⟨cᵅ⟩|ⁿ ⁻¹'],
-                                 input_core_dims=[['i', 'α'], ['α', 'j']],
+                                 input_core_dims=[['i', 'αs'], ['αs', 'j']],
                                  output_core_dims=[['i', 'j']],
                                  dask='parallelized')
 
