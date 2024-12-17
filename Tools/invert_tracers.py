@@ -268,8 +268,8 @@ def main():
                                                       dask='parallelized')
 
     if normalize_tracers:
-        mask_lcf = np.sqrt((dsa['⟨uᵢ′cᵅ′⟩ₛ']**2).sum('i')) > 0.1*np.sqrt((dsa['⟨uᵢ′cᵅ′⟩ₛ']**2).sum('i')).max(['xC', 'zC'])
-        rms_mag = np.sqrt((dsa['⟨uᵢ′cᵅ′⟩ₛ']**2).sum('i').where(mask_lcf).median(['xC', 'zC']))
+        #mask_lcf = np.sqrt((dsa['⟨uᵢ′cᵅ′⟩ₛ']**2).sum('i')) > 0.1*np.sqrt((dsa['⟨uᵢ′cᵅ′⟩ₛ']**2).sum('i')).max(['xC', 'zC'])
+        rms_mag = 1#np.sqrt((dsa['⟨uᵢ′cᵅ′⟩ₛ']**2).sum('i').where(mask_lcf).median(['xC', 'zC']))
         #grd_mag = np.sqrt((dsa['∇ⱼ⟨cᵅ⟩']**2).sum('j'))#.median(['xC', 'zC'])
         #grd_max = grd_mag.max('α')
         #rms_mag = grd_mag/grd_max
