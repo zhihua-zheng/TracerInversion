@@ -1,0 +1,33 @@
+#!/bin/bash -l
+#PBS -A UMCP0020
+#PBS -N run_{0}{1}
+#PBS -o Logs/run_{0}{1}.log
+#PBS -j oe
+#PBS -l walltime=20:00:00
+#PBS -q casper
+#PBS -l select=1:ncpus=1:ngpus=1:mem=32GB
+#PBS -l gpu_type=v100
+#PBS -M zhihua@umd.edu
+#PBS -m abe
+
+### Clear and load all the modules needed
+module --force purge
+module load ncarenv/23.10
+module load cuda/12.2.1
+
+export TMPDIR=/glade/derecho/scratch/$USER/temp
+mkdir -p $TMPDIR
+
+### Run simulation
+proj_dir=/glade/u/home/zhihuaz/Projects/TRACE-SEAS/TracerInversion
+time julia1.11 --project=$proj_dir Simulations/double_front_em.jl {1} '{0}'
+###2>&1 | tee Logs/{0}{1}.out
+
+### Overwrite previous log file
+LOG=$proj_dir/Logs/{0}{1}.log
+if [ -f "$LOG" ]; then
+    rm -f $LOG
+fi
+mv $proj_dir/Logs/run_{0}{1}.log $LOG
+
+qstat -f $PBS_JOBID >> Logs/{0}{1}.log

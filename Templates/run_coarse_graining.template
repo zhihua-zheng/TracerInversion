@@ -1,18 +1,19 @@
 #!/bin/bash -l
 #PBS -A UMCP0020
-#PBS -N run_{0}_TI
-#PBS -o Logs/run_{0}_TI.log
+#PBS -N run_{0}_flux
+#PBS -o Logs/run_{0}_flux.log
 #PBS -j oe
 #PBS -l walltime=00:30:00
-#PBS -q casper
-#PBS -l select=1:ncpus=16:mem=80GB
+#PBS -q casper 
+#PBS -l select=1:ncpus=8:ngpus=1:mem=80GB
+#PBS -l gpu_type=h100
 #PBS -M zhihua@umd.edu
 #PBS -m abe
 
 ### Clear and load all the modules needed
 module --force purge
-module load ncarenv
-module load conda
+module load ncarenv/23.10
+module load cuda/12.2.1
 
 export TMPDIR=/glade/derecho/scratch/$USER/temp
 mkdir -p $TMPDIR
@@ -20,15 +21,13 @@ mkdir -p $TMPDIR
 ### Run analysis
 proj_dir=/glade/u/home/zhihuaz/Projects/TRACE-SEAS/TracerInversion
 conda activate trace-seas
-#python3 $proj_dir/Tools/invert_tracers_mlR.py -c {0}
-#python3 $proj_dir/Tools/invert_tracers_submeso.py -c {0}
-python3 $proj_dir/Tools/invert_tracers_finescale.py -c {0}
+python3 $proj_dir/Tools/coarse_graining.py -c {0}
 
 ### Overwrite previous log file
-LOG=$proj_dir/Logs/{0}_TI.log
+LOG=$proj_dir/Logs/{0}_flux.log
 if [ -f "$LOG" ]; then
     rm -f $LOG
 fi
-mv $proj_dir/Logs/run_{0}_TI.log $LOG
+mv $proj_dir/Logs/run_{0}_flux.log $LOG
 
-qstat -f $PBS_JOBID >> Logs/{0}_TI.log
+qstat -f $PBS_JOBID >> Logs/{0}_flux.log
