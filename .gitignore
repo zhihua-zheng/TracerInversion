@@ -7,7 +7,7 @@
 *.jld2
 *.nc
 *.log
-#run*.sh
+run*.sh
 Figures/
 Animations/
 Data/
