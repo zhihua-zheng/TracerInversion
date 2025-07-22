@@ -5,19 +5,11 @@ casenames = [# frontal zone
             # "f11_M003_Q000_W000_D000_St0",
             # "f11_M003_Q000_W000_D000_St0_Ri40",
             # "f11_M001_Q000_W000_D000_St0_Ri1",
-            # "f11_M010_Q000_W000_D000_St0_Ri1",
 
-             # channel
-              "c11_M010_Q000_W000_D000_St0_Ri10",
-             #"c11_M001_Q000_W000_D000_St0_Ri1000",
-
-
-             # wind + wave
-            # "n11_Q000_W037_D000_St1",
-            # "n11_Q000_W009_D000_St1",
-
-             # wave
-            # "n11_Q000_W000_D000_St1",
+             # double front
+            # "d11_M003_Ri040_Q000_W000_D000_St0",
+             "d11_M003_Ri040_Q001_W000_D000_St0",
+             "d11_M003_Ri040_Q010_W000_D000_St0",
             ]
 
 with open('Templates/run_invert_tracers.template', 'r') as f:
