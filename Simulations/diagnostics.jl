@@ -42,7 +42,6 @@ end
     v  = @at CellCenter model.velocities.v
     w  = @at CellCenter model.velocities.w
     b  = model.tracers.b
-    cs = Dict{Symbol, Any}(key => c for (key,c) in pairs(model.tracers) if key != :b)
 
     #u′  = u - y_average(u)
     #w′  = w - y_average(w)
@@ -114,7 +113,6 @@ end
     #                                :Qv => Qv,
     #                                :Qb => Qb)
 
-    outputs_state   = merge(flow_state, cs)
     #outputs_derived = merge(outputs_state, flow_derived, u′cs′, w′cs′, dcsdx, dcsdz)#, ucs_sgs, wcs_sgs)
     #outputs_mean    = Dict{Symbol, Any}(Symbol(key, :_ym) => y_average(val) for (key,val) in pairs(outputs_derived))
     #outputs_mean  = merge(outputs_ymean, surf_fluxes)
@@ -132,10 +130,11 @@ end
         vp2 = Field(Average(Field(Integral(vprime^2, dims=3)), dims=2))
         wp2 = Field(Average(Field(Integral(wprime^2, dims=3)), dims=2))
         wbt = Field(Average(Field(Integral(wprime*bprime, dims=3)), dims=2))
-        outputs_mean = (; up2=up2, vp2=vp2, wp2=wp2, wbt=wbt)
-
-        return outputs_state, outputs_mean
+        flow_mean = (; up2=up2, vp2=vp2, wp2=wp2, wbt=wbt)
+        return flow_state, flow_mean
     else
+        cs = Dict{Symbol, Any}(key => c for (key,c) in pairs(model.tracers) if key != :b)
+        outputs_state = merge(flow_state, cs)
         return outputs_state
     end
 end

@@ -1,4 +1,3 @@
-using Pkg; Pkg.instantiate()
 using ArgParse
 using Oceananigans
 using Oceananigans.Units
@@ -46,7 +45,7 @@ end
 casename = args["casename"]
 spinup   = args["spinup"]
 outdir   = args["outdir"]
-init_tracer = args["init_tracer"]
+init_tracer  = args["init_tracer"]
 
 
 ###########-------- SIMULATION PARAMETERS ----------------#############
@@ -82,12 +81,13 @@ grid = RectilinearGrid(GPU(),
 
 ###########-------- INITIAL & BOUNDARY CONDITIONS -----------------#############
 @inline tracer_like_nutrient(x, y, z) = (1 - tanh(3 * (z + pm.Hm))) / 2
+@inline linear_surface_tracer_flux(x, y, t, c8) = - 1e-3 * (1 - c8)
 @inline b_vertical(z) = pm.N₁² * (z + pm.Lz) + (pm.N₀² - pm.N₁²) * max(z + pm.Hm, 0)
 @inline heaviside(z)  = ifelse(z < 0, zero(z), one(z))
-@inline filament_horizontal(x) = (tanh( 2 * (x + pm.Lp) / pm.Lf) - tanh(2 * (x - pm.Lp) / pm.Lf)) * pm.Lf / 2
-@inline filament_vertical(z)   = (tanh(12 * (z + pm.Hm) / pm.Hm) + 1) / 2
+@inline filament_horizontal(x) = (tanh(2 * (x + pm.Lp) / pm.Lf) - tanh(2 * (x - pm.Lp) / pm.Lf)) * pm.Lf / 2
+@inline filament_vertical(z)   = (tanh(6 * (z + pm.Hm + 30) / pm.Hm) + 1) / 2
 @inline filament_horizontal_gradient(x) = (sech(2 * (x + pm.Lp) / pm.Lf))^2 - (sech(2 * (x - pm.Lp) / pm.Lf))^2
-@inline filament_vertical_integral(z)   = (z + pm.Hm / 12 * log(cosh(12 * (z + pm.Hm) / pm.Hm))) / 2
+@inline filament_vertical_integral(z)   = (z + pm.Hm / 6 * log(cosh(6 * (z + pm.Hm + 30) / pm.Hm))) / 2
 @inline Vg(x, z) = pm.M² / pm.f * filament_horizontal_gradient(x) * (filament_vertical_integral(z) - filament_vertical_integral(-pm.Lz))
 
 Random.seed!(pm.em)
@@ -108,7 +108,15 @@ v_bcs = FieldBoundaryConditions(top = FluxBoundaryCondition(-pm.τ₀ʸ/pm.ρ₀
                                 bottom = FluxBoundaryCondition(0))
 b_bcs = FieldBoundaryConditions(top = FluxBoundaryCondition(pm.B₀),
                                 bottom = GradientBoundaryCondition(pm.N₁²))
-
+if pm.use_fluxed_c & (!spinup)
+    c8_bcs = FieldBoundaryConditions(top = FluxBoundaryCondition(linear_surface_tracer_flux, field_dependencies=:c8),
+                                     bottom = FluxBoundaryCondition(0)) 
+#    c9_bcs = FieldBoundaryConditions(top = FluxBoundaryCondition(pm.B₀),
+#                                     bottom = GradientBoundaryCondition(pm.N₁²))
+    all_bcs = (u=u_bcs, v=v_bcs, b=b_bcs, c8=c8_bcs)#, c9=c9_bcs)
+else
+    all_bcs = (u=u_bcs, v=v_bcs, b=b_bcs)
+end
 
 ###########-------- SPONGE LAYER -----------------#############
 #@inline target_v(x, y, z, t) = Vg(x, z)
@@ -123,13 +131,15 @@ sponge_forcing = (u=uvw_sponge, v=uvw_sponge, w=uvw_sponge, b=b_sponge)
 
 ###########-------- DEFINE MODEL ---------------#############
 closure_sgs = SmagorinskyLilly()#nothing
-passive_tracers = ifelse(spinup, [Symbol(:c, pm.n_tracers)], [Symbol(:c, i) for i in 1:pm.n_tracers])
+passive_tracers = ifelse(spinup, [],
+                         ifelse(pm.use_fluxed_c, [Symbol(:c, i) for i in pm.n_tracers:(pm.n_tracers+1)],
+                                [Symbol(:c, i) for i in 1:pm.n_tracers]))
 
 model = NonhydrostaticModel(; grid,
                             coriolis = FPlane(f=pm.f),
                             buoyancy = BuoyancyTracer(),
                             tracers  = (passive_tracers..., :b),
-                            boundary_conditions = (b=b_bcs, u=u_bcs, v=v_bcs),
+                            boundary_conditions = all_bcs,
                             forcing = sponge_forcing,
                             closure = closure_sgs,
                             advection = WENO(order=5))
@@ -137,9 +147,6 @@ model = NonhydrostaticModel(; grid,
 if spinup
     @info "Start from noise...."
     set!(model, u=uᵢ, v=vᵢ, b=bᵢ)
-
-    @info "Set tracer c$(pm.n_tracers) distribution...."
-    eval(Meta.parse("set!(model, c$(pm.n_tracers) = (x, y, z) -> tracer_like_nutrient(x, y, z))"))
 else
     @info "Restart from checkpoint file...."
     all_ckp   = split(read(`ls $ckpdir -1v`, String))
@@ -149,10 +156,19 @@ else
 
     if init_tracer
         @info "Initialize tracer...."
-        for i in 1:(pm.n_tracers - 1)
-            tracer_params = (; pm.Lx, pm.Ly, pm.Lz, pm.Lf, pm.Lp, pm.Hm, i)
-            @info "Set tracer c$i distribution...."
-            eval(Meta.parse("set!(model, c$i = (x, y, z) -> tracer_IC(x, y, z, $tracer_params))"))
+
+        @info "Set tracer c$(pm.n_tracers) distribution...."
+        eval(Meta.parse("set!(model, c$(pm.n_tracers) = (x, y, z) -> tracer_like_nutrient(x, y, z))"))
+
+        if pm.use_fluxed_c
+            @info "Set tracer c8 distribution...."
+            set!(model, c8=0)
+        else
+            for i in 1:(pm.n_tracers - 1)
+                tracer_params = (; pm.Lx, pm.Ly, pm.Lz, pm.Lf, pm.Lp, pm.Hm, i)
+                @info "Set tracer c$i distribution...."
+                eval(Meta.parse("set!(model, c$i = (x, y, z) -> tracer_IC(x, y, z, $tracer_params))"))
+            end
         end
     else
         @info "Tracer already initialized...."
@@ -189,16 +205,16 @@ global_attributes = Dict(pairs(map(bool2int, pm)))
 if pm.save_mean
     outputs_field, outputs_mean = get_outputs(model, pm.save_mean)
     ixm = round(Int, pm.Nx/2)
-    ixr = round(Int, pm.Nx/4*3)
+    ixl = round(Int, pm.Nx/4)
     slicers = (; xmid  = (ixm, :, :),
-                 xfcr  = (ixr, : ,:),
+                 xfcl  = (ixl, : ,:),
                  south = (:, 1, :),
                  mlb   = (:, :, 28),
                  top   = (:, :, 58))
     for side in keys(slicers)
         indices = slicers[side]
         simulation.output_writers[side] = NetCDFOutputWriter(model, outputs_field;
-                                                             filename = pm.outfile_prefix * "_$(side).nc",
+                                                             filename = pm.output_prefix * "_$(side).nc",
                                                              dir = outdir,
                                                              global_attributes = global_attributes,
                                                              schedule = TimeInterval(pm.save_out_interval),
@@ -207,7 +223,7 @@ if pm.save_mean
     end
 
     simulation.output_writers[:averages] = NetCDFOutputWriter(model, outputs_mean;
-                                                              filename = pm.outfile_prefix * "_averages.nc",
+                                                              filename = pm.output_prefix * "_averages.nc",
                                                               dir = outdir,
                                                               global_attributes = global_attributes,
                                                               schedule = TimeInterval(pm.save_out_interval),
@@ -216,7 +232,7 @@ if pm.save_mean
 else
     outputs_field = get_outputs(model, pm.save_mean)
     simulation.output_writers[:state] = NetCDFOutputWriter(model, outputs_field;
-                                                           filename = pm.outfile_prefix * "_state.nc",
+                                                           filename = pm.output_prefix * "_state.nc",
                                                            dir = outdir,
                                                            global_attributes = global_attributes,
                                                            schedule = TimeInterval(pm.save_out_interval),

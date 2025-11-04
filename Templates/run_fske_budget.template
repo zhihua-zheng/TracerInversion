@@ -1,0 +1,36 @@
+#!/bin/bash -l
+#PBS -A UMCP0020
+#PBS -N fske_budget_job_array
+#PBS -o Logs/run_{0}_fske_budget.log
+#PBS -j oe
+#PBS -l walltime=00:30:00
+#PBS -q develop@desched1
+#PBS -l job_priority=economy
+#PBS -l select=1:ncpus=128:mem=235GB
+#PBS -J 1-47:2
+#PBS -M zhihua@umd.edu
+#PBS -m abe
+
+### Clear and load all the modules needed
+module --force purge
+module load ncarenv
+module load conda
+
+export TMPDIR=$SCRATCH/temp
+mkdir -p $TMPDIR
+
+### Run analysis
+proj_dir=$HOME/Projects/TRACE-SEAS/TracerInversion
+data_dir=$SCRATCH/TracerInversion/Output/{0}
+mkdir -p $data_dir
+conda activate trace-seas
+python3 $proj_dir/Tools/fske_budget.py -c {0} -hn $PBS_ARRAY_INDEX
+
+### Overwrite previous log file
+LOG=$proj_dir/Logs/{0}_fske_budget.log
+if [ -f "$LOG" ]; then
+    rm -f $LOG
+fi
+mv $proj_dir/Logs/run_{0}_fske_budget.log $LOG
+
+qstat -f $PBS_JOBID >> Logs/{0}_fske_budget.log

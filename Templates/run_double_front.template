@@ -20,6 +20,7 @@ mkdir -p $TMPDIR
 
 ### Run simulation
 proj_dir=/glade/u/home/zhihuaz/Projects/TRACE-SEAS/TracerInversion
+#julia1.11 --project=$proj_dir -e 'using Pkg; Pkg.instantiate()' # only need to run once
 time julia1.11 --project=$proj_dir Simulations/double_front_em.jl {1} '{0}'
 ###2>&1 | tee Logs/{0}{1}.out
 

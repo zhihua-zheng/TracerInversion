@@ -14,17 +14,18 @@ using Parameters
                κ₀ = 1.5e-7, # [m² s⁻¹] molecular diffusivity
 
                RiB₀  = 1,    # mixed layer balanced Richardson number
-               noise = 1e-1, # initial noise amplitude
+               noise = 1e-2, # initial noise amplitude
                save_ckp_interval = 1days,    # how often to save checkpoints 
                tracer_reset_interval = 1, # [Tf] how often to reset tracer distribution
                tracer_restoring_rate = 1/(10*24*3600), # [s⁻¹] the tracer restoring rate
-               n_tracers = 7, # number of passive tracers
+               n_tracers = 7, # number of conserved passive tracers
 
                z_refinement = 1.38,# controls spacing near surface (higher means finer spaced)
                z_stretching = 26,  # controls rate of stretching at bottom
                damping_rate = 1/60, # [s⁻¹] relax fields on a time-scale comparable to N₁, following Taylor & Ferrari 2010
  
                use_stretched_z = true,
+               use_fluxed_c    = true,
                restore_tracer  = false,
               )
 
@@ -68,7 +69,7 @@ end
 function enrich_parameters(params, casename, spinup, init_tracer)
     if spinup
         spinup_casename = SubString(casename, 1:19) * "_Q000_W000_D000_St0"
-        outfile_prefix  = SubString(casename, 1:19) * "_spinup"
+        output_prefix = SubString(casename, 1:19) * "_spinup"
         case_type, coarsen_h, coarsen_z, M², RiB₁, em, Q₀, τ₀, θ₀, wind_oscillation, use_Stokes = decode_casename(spinup_casename)
         stop_time = 10days
         save_out_interval = 30minutes
@@ -78,23 +79,23 @@ function enrich_parameters(params, casename, spinup, init_tracer)
     else
         case_type, coarsen_h, coarsen_z, M², RiB₁, em, Q₀, τ₀, θ₀, wind_oscillation, use_Stokes = decode_casename(casename)
         save_out_interval = 20minutes
-        ckp_prefix = "with-tracer"
+        ckp_prefix = SubString(casename, 21:24) * ifelse(params.use_fluxed_c, "_with-tracer-fluxed", "_with-tracer")
         if init_tracer
-            pickup_time = 5days
+            pickup_time = ifelse(M²==3e-8, 6days, 4days)
             pickup_idx  = Int64(pickup_time / params.save_ckp_interval) + 1 # accounting for day 0
-            stop_time   = 7days
-            save_mean   = true
+            stop_time   = pickup_time + 2days
+            save_mean   = false
             save_ckp    = true
-            pickup_prefix  = "spinup"
-            outfile_prefix = casename * "_init-tracer"
+            pickup_prefix = "spinup"
+            output_prefix = casename * ifelse(params.use_fluxed_c, "_init-tracer-fluxed", "_init-tracer")
         else
             pickup_time = 7days
             pickup_idx  = Int64((pickup_time - 5days) / params.save_ckp_interval)
             stop_time   = 9days
             save_mean   = false
             save_ckp    = false
-            pickup_prefix  = "with-tracer"
-            outfile_prefix = casename
+            pickup_prefix = SubString(casename, 21:24) * ifelse(params.use_fluxed_c, "_with-tracer-fluxed", "_with-tracer")
+            output_prefix = casename * ifelse(params.use_fluxed_c, "_with-tracer-fluxed", "_with-tracer")
         end
     end
 
