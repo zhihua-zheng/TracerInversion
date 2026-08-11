@@ -1,9 +1,11 @@
 #!/usr/bin/env python3
+import os
 import cmocean
 import numpy as np
 import dask.array as daska
 import matplotlib.pyplot as plt
 import matplotlib.ticker as tkr
+from matplotlib import font_manager
 from matplotlib.colors import LinearSegmentedColormap
 # from mpl_toolkits.mplot3d.axis3d import Axis
 
@@ -28,38 +30,81 @@ class FormatScalarFormatter(tkr.ScalarFormatter):
 #     Axis._get_coord_info = _get_coord_info_new
 
 
-def plot_box_frame(ax, xlim, ylim, zlim, azim, cloud=False, **edges_kw):
+def plot_box_frame(ax, xlim, ylim, zlim, azim, three_slices=True, **edges_kw):
     xmin, xmax = xlim
     ymin, ymax = ylim
     zmin, zmax = zlim
-    xazm = xmin if azim < -90 else xmax
+    if azim < -90:
+        xazm = xmin
+    elif azim > -90:
+        xazm = xmax
+    else:
+        three_slices = False
     ax.plot([xmax, xmax], [ymin, ymax], zmax, **edges_kw)
     ax.plot([xmin, xmax], [ymin, ymin], zmax, **edges_kw)
     ax.plot([xmin, xmin], [ymin, ymax], zmax, **edges_kw)
     ax.plot([xmin, xmax], [ymax, ymax], zmax, **edges_kw)
     ax.plot([xmax, xmax], [ymin, ymin], [zmin, zmax], **edges_kw)
     ax.plot([xmin, xmin], [ymin, ymin], [zmin, zmax], **edges_kw)
-    ax.plot([xazm, xazm], [ymax, ymax], [zmin, zmax], **edges_kw)
-    if not cloud:
+    if three_slices:
+        ax.plot([xazm, xazm], [ymax, ymax], [zmin, zmax], **edges_kw)
         ax.plot([xazm, xazm], [ymin, ymax], zmin, **edges_kw)
-        ax.plot([xmin, xmax], [ymin, ymin], zmin, **edges_kw)
+    ax.plot([xmin, xmax], [ymin, ymin], zmin, **edges_kw)
+
+
+def plot_box_cut_frame(ax, xlim, ylim, zlim, xcut, ycut, zcut, azim, three_slices=True, **edges_kw):
+    xmin, xmax = xlim
+    ymin, ymax = ylim
+    zmin, zmax = zlim
+    if azim < -90:
+        xazm = xmin
+    elif azim > -90:
+        xazm = xmax
     else:
-        ax.plot([xmin, xmin], [ymax, ymax], [zmin, zmax], **edges_kw)
+        three_slices = False
+    ax.plot([xmax, xmax], [ycut, ymax], zmax, **edges_kw)
+    ax.plot([xmin, xcut], [ymin, ymin], zmax, **edges_kw)
+    ax.plot([xmin, xmin], [ymin, ymax], zmax, **edges_kw)
+    ax.plot([xmin, xmax], [ymax, ymax], zmax, **edges_kw)
+    ax.plot([xmax, xmax], [ymin, ymin], [zmin, zcut], **edges_kw)
+    ax.plot([xmin, xmin], [ymin, ymin], [zmin, zmax], **edges_kw)
+    if three_slices:
+        ax.plot([xazm, xazm], [ymax, ymax], [zmin, zmax], **edges_kw)
+        ax.plot([xazm, xazm], [ymin, ymax], zmin, **edges_kw)
+    ax.plot([xmin, xmax], [ymin, ymin], zmin, **edges_kw)
+
+    # for the cutout
+    ax.plot([xcut, xcut], [ymin, ycut], zmax, **edges_kw)
+    ax.plot([xcut, xmax], [ycut, ycut], zmax, **edges_kw)
+    ax.plot([xcut, xcut], [ymin, ycut], zcut, **edges_kw)
+    ax.plot([xcut, xmax], [ycut, ycut], zcut, **edges_kw)
+    ax.plot([xmax, xmax], [ymin, ycut], zcut, **edges_kw)
+    ax.plot([xcut, xmax], [ymin, ymin], zcut, **edges_kw)
+    ax.plot([xcut, xcut], [ymin, ymin], [zcut, zmax], **edges_kw)
+    ax.plot([xcut, xcut], [ycut, ycut], [zcut, zmax], **edges_kw)
+    ax.plot([xmax, xmax], [ycut, ycut], [zcut, zmax], **edges_kw)
 
 
-def config_colorbar(pcm, ax=None, sci_notation=True, shrink=1, nbins=None, **kwargs):
+def config_colorbar(pcm, ax=None, location='right', sci_notation=True, shrink=1, nbins=None, aspect=60, **kwargs):
     if ax is None: ax = plt.gca()
-    cbar = plt.colorbar(pcm, ax=ax, location='right', shrink=shrink, aspect=50, pad=0.02, **kwargs)
-    cbar.ax.tick_params(labelsize=6, length=2)
+    cbar = plt.colorbar(pcm, ax=ax, location=location, shrink=shrink, aspect=aspect, **kwargs)
+    cbar.ax.tick_params(labelsize=12, length=2)
     if sci_notation:
         cbar.formatter.set_powerlimits((0, 0))
+        cbar.formatter.set_useMathText(True)
         if nbins is not None:
-            cbar.ax.locator_params(nbins=5)
-        offset_text = cbar.ax.yaxis.get_offset_text()
-        offset_text.set_fontsize(7)
+            cbar.ax.locator_params(nbins=nbins)
+        if location=='right':
+            offset_text = cbar.ax.yaxis.get_offset_text()
+            offset_text.set_position((0, 1))
+            offset_text.set_verticalalignment('bottom')
+        elif location=='top':
+            offset_text = cbar.ax.xaxis.get_offset_text()
+            offset_text.set_position((1, 1))
+            offset_text.set_verticalalignment('top')
+        offset_text.set_fontsize(12)
         offset_text.set_horizontalalignment('left')
-        offset_text.set_verticalalignment('bottom')
-        offset_text.set_position((0, 1))
+    return cbar
 
 
 def div_sym_cmap(rcut, base='RdBu_r'):
@@ -101,6 +146,7 @@ def get_coords(da, xvar, yvar, hori_km=False):
 
 
 def pcolor_center(da, ax=None, cmap='RdBu_r', cupr=1, smag=None, mag_mode=None, hori_km=True, rotate=False, **kwargs):
+    ras = True
     if ax is None: ax = plt.gca()
     if isinstance(da.data, daska.Array):
         da = da.load()
@@ -113,14 +159,15 @@ def pcolor_center(da, ax=None, cmap='RdBu_r', cupr=1, smag=None, mag_mode=None, 
             smag = np.abs(da).quantile(0.99, dim=[xvar, yvar])*cupr
     x, y = get_coords(da, xvar, yvar, hori_km=hori_km)
     if 'norm' in kwargs:
-        pcm = ax.pcolormesh(x, y, da, cmap=cmap, **kwargs);
+        pcm = ax.pcolormesh(x, y, da, cmap=cmap, rasterized=ras, **kwargs);
     else:
-        pcm = ax.pcolormesh(x, y, da, cmap=cmap, vmin=-smag, vmax=smag, **kwargs);
+        pcm = ax.pcolormesh(x, y, da, cmap=cmap, vmin=-smag, vmax=smag, rasterized=ras, **kwargs);
     ax.ticklabel_format(useMathText=True)
     return pcm, smag
 
 
-def pcolor_limits(da, ax=None, cmap='RdBu_r', clim=None, mag_mode=None, cnorm='linear', hori_km=True, rotate=False, **kwargs):
+def pcolor_limits(da, ax=None, cmap='RdBu_r', cupr=1, clim=None, mag_mode=None, cnorm='linear', hori_km=True, rotate=False, **kwargs):
+    ras = True
     if ax is None: ax = plt.gca()
     if isinstance(da.data, daska.Array):
         da = da.load()
@@ -134,11 +181,11 @@ def pcolor_limits(da, ax=None, cmap='RdBu_r', clim=None, mag_mode=None, cnorm='l
                 umag = da.max(dim=[xvar, yvar])
                 lmag = da.min(dim=[xvar, yvar])
             else:
-                umag = da.quantile(0.99, dim=[xvar, yvar])
+                umag = da.quantile(0.99, dim=[xvar, yvar])*cupr
                 lmag = da.quantile(0.01, dim=[xvar, yvar])
             clim = [lmag, umag]
     x, y = get_coords(da, xvar, yvar, hori_km=hori_km)
-    pcm = ax.pcolormesh(x, y, da, cmap=cmap, vmin=clim[0], vmax=clim[1], **kwargs);
+    pcm = ax.pcolormesh(x, y, da, cmap=cmap, vmin=clim[0], vmax=clim[1], rasterized=ras, **kwargs);
     ax.ticklabel_format(useMathText=True)
     return pcm, clim
 
@@ -154,6 +201,19 @@ def get_pdf_of_icdf(pdf, bin_area, icdf=[0.3, 0.6, 0.9, 0.995]):
         idx = np.searchsorted(cdf, f) # where the inquired cdf is located
         pdf_of_icdf.append(pdf_sort[idx])
     return np.flip(pdf_of_icdf)
+
+
+def get_intgrd_of_icdf(intgrd, icdf=[0.3, 0.6, 0.9, 0.995]):
+    if isinstance(intgrd, daska.Array):
+        intgrd = intgrd.compute()
+    intgrd = intgrd.flatten()
+    intgrd_sort = np.sort(intgrd)[::-1]
+    cdf = np.cumsum(intgrd_sort) / np.sum(intgrd_sort)
+    intgrd_of_icdf = []
+    for f in icdf:
+        idx = np.searchsorted(cdf, f) # where the inquired cdf is located
+        intgrd_of_icdf.append(intgrd_sort[idx])
+    return np.flip(intgrd_of_icdf)
 
 
 def create_register_cmaps(extreme=True):
@@ -191,8 +251,35 @@ def create_register_cmaps(extreme=True):
         cmap_cp = div_sym_cmap(0.1, base=cmapcp)
         cmap_flux = div_sym_cmap(0.1, base=cmapflux)
         RdBu_r_ds = div_sym_cmap(0.1, base='RdBu_r')
+        BrBG_r_ds = div_sym_cmap(0.1, base='BrBG_r')
+        PiYG_r_ds = div_sym_cmap(0.1, base='PiYG_r')
+        curl_ds   = div_sym_cmap(0.1, base='cmo.curl')
         # balance_ds = div_sym_cmap(0.05, base='cmo.balance')
         plt.colormaps.register(cmap=cmap_w)
         plt.colormaps.register(cmap=cmap_cp)
         plt.colormaps.register(cmap=cmap_flux)
         plt.colormaps.register(cmap=RdBu_r_ds)
+        plt.colormaps.register(cmap=BrBG_r_ds)
+        plt.colormaps.register(cmap=PiYG_r_ds)
+        plt.colormaps.register(cmap=curl_ds)
+
+
+def set_font(fontname):
+    mscorefonts = ['Andale Mono', 'Arial', 'Arial Black', 'Comic Sans MS', 'Courier New',
+                   'Georgia', 'Impact', 'Times New Roman', 'Trebuchet MS', 'Verdana', 'Webdings']
+    if fontname not in mscorefonts:
+        home = os.getenv('HOME')
+        font_dirs  = home + f"/Projects/Misc/Fonts/{fontname.replace(' ', '_')}"
+        font_files = font_manager.findSystemFonts(fontpaths=font_dirs)
+        for font_file in font_files:
+            font_manager.fontManager.addfont(font_file)
+    plt.rcParams['font.family'] = 'sans-serif'
+    plt.rcParams['font.sans-serif'] = fontname
+    plt.rcParams['mathtext.fontset'] = 'cm'
+    # plt.rcParams['pdf.fonttype'] = 42
+    plt.rcParams['xtick.labelsize'] = 12
+    plt.rcParams['ytick.labelsize'] = 12
+    plt.rcParams['axes.labelsize'] = 15
+    plt.rcParams['axes.labelpad'] = 5 # default 4
+    plt.rcParams['axes.titlepad'] = 7 # default 6
+    plt.rcParams['legend.fontsize'] = 14

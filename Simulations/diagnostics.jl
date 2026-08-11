@@ -1,13 +1,14 @@
 #using Oceananigans.TurbulenceClosures: diffusivity, viscosity
-#using Oceanostics.FlowDiagnostics: ErtelPotentialVorticity#, RichardsonNumber, RossbyNumber
-#using Oceanostics.TKEBudgetTerms: PressureRedistributionTerm
+using Oceanostics.FlowDiagnostics: ErtelPotentialVorticity#, RichardsonNumber, RossbyNumber
+using Oceanostics.TKEBudgetTerms: KineticEnergyDissipationRate #PressureRedistributionTerm
 #using Oceanostics.PotentialEnergyEquationTerms: PotentialEnergy
 
-using Oceananigans.Grids: Center, Face
+using Oceananigans.Grids: Center, Face, znode
 using Oceananigans.Operators
 using Oceananigans.AbstractOperations: @at, ∂x, ∂z
 ccc_scratch = Field{Center, Center,  Center}(grid)
 cnc_scratch = Field{Center, Nothing, Center}(grid)
+fff_scratch = Field{Face,   Face,    Face}(grid)
 #cnf_scratch = Field{Center, Nothing, Face}(grid)
 #fnc_scratch = Field{Face,   Nothing, Center}(grid)
 #fnf_scratch = Field{Face,   Nothing, Face}(grid)
@@ -15,6 +16,8 @@ CellCenter  = (Center, Center, Center)
 
 @inline Fintp_ccc(op) = Field((@at CellCenter op), data=ccc_scratch.data)
 @inline Field_ccc(op) = Field(op,                  data=ccc_scratch.data)
+@inline in_ml(i, j, k, grid, q) = znode(k, grid, Face()) ≥ -60
+
 @inline function y_average(F; field=true)
     avg = Average(F, dims=2)
     if field
@@ -37,11 +40,25 @@ CellCenter  = (Center, Center, Center)
 end
 
 
-@inline function get_outputs(model, save_mean)
+@inline function get_outputs(model, save_mean, tra_inv)
     u  = @at CellCenter model.velocities.u
     v  = @at CellCenter model.velocities.v
     w  = @at CellCenter model.velocities.w
     b  = model.tracers.b
+
+    if tra_inv
+        flow_state = Dict{Symbol, Any}(:u => u,
+                                       :v => v,
+                                       :w => w,
+                                       :b => b)
+    else
+        #eps = Fintp_ccc(KineticEnergyDissipationRate(model))
+        flow_state = Dict{Symbol, Any}(:u => u,
+                                       :v => v,
+                                       :w => w,
+                                       :b => b)
+                                       #:eps => eps)
+    end
 
     #u′  = u - y_average(u)
     #w′  = w - y_average(w)
@@ -101,10 +118,6 @@ end
     #Qb = Field(Average(SurfaceTracerFlux(model,   :b), dims=(1,2)))
 
     # Assemble outputs
-    flow_state = Dict{Symbol, Any}(:u => u,
-                                   :v => v,
-                                   :w => w,
-                                   :b => b)
     #flow_derived = Dict{Symbol, Any}(:dbdz => dbdz,
     #                                 :dbdx => dbdx,
     #                                 :u′b′ => u′b′,
@@ -122,6 +135,7 @@ end
         Wym = Field(Average(w, dims=2))
         Vym = Field(Average(v, dims=2))
         Uym = Field(Average(u, dims=2))
+        q   = Field(ErtelPotentialVorticity(model), data=fff_scratch.data)
         uprime = u - Uym
         vprime = v - Vym
         wprime = w - Wym
@@ -130,7 +144,9 @@ end
         vp2 = Field(Average(Field(Integral(vprime^2, dims=3)), dims=2))
         wp2 = Field(Average(Field(Integral(wprime^2, dims=3)), dims=2))
         wbt = Field(Average(Field(Integral(wprime*bprime, dims=3)), dims=2))
-        flow_mean = (; up2=up2, vp2=vp2, wp2=wp2, wbt=wbt)
+
+        qml = Field(Average(q, dims=(2,3), condition=in_ml))
+        flow_mean = (; up2=up2, vp2=vp2, wp2=wp2, wbt=wbt, qml=qml)
         return flow_state, flow_mean
     else
         cs = Dict{Symbol, Any}(key => c for (key,c) in pairs(model.tracers) if key != :b)

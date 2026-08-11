@@ -2,17 +2,78 @@
 
 import numpy as np
 import xarray as xr
-from scipy import interpolate
+from scipy import interpolate, integrate
 from scipy.ndimage import uniform_filter
 
 
+# def integrate_to_zi_ufunc(zi, zF, dzF, a):
+#     leading = a.shape[:-1]
+#     nz      = a.shape[-1]
+#     ncols   = int(np.prod(leading)) if leading else 1
+#     a2d     = a.reshape(ncols, nz)
+#     zi2d    = zi.reshape(ncols, 1)
+#     aint    = np.full((ncols, 1), np.nan)
+#     for icol in range(ncols):
+#         last_idx = int(np.max(np.where(zF[1:] <= zi2d[icol,:])) + 1)
+#         aint_full_cell = (a2d[icol,:last_idx] * dzF[:last_idx]).sum()
+#         aint_partial_cell = a2d[icol,last_idx] * (zi2d[icol,:] - zF[last_idx-1])
+#         aint[icol,:] = aint_full_cell + aint_partial_cell
+#     return aint.reshape(leading)
+
+
+# def integrate_to_zi(a, zF, dzF, zi):
+#     return xr.apply_ufunc(integrate_to_zi_ufunc, zi, zF, dzF, a,
+#                           input_core_dims=[[], ['zF'], ['zC'], ['zC']],
+#                           output_core_dims=[[]],
+#                           output_dtypes=[float],
+#                           dask='parallelized',
+#                           vectorize=False)
+
+
+def integrate_to_zi_ufunc(zi, zC, a_zi, a):
+    leading = a.shape[:-1]
+    nz      = a.shape[-1]
+    ncols   = int(np.prod(leading)) if leading else 1
+    a2d     = a.reshape(ncols, nz)
+    a_zi2d  = a_zi.reshape(ncols, 1)
+    zi2d    = zi.reshape(ncols, 1)
+    aint    = np.full((ncols, 1), np.nan)
+    for icol in range(ncols):
+        last_idx = int(np.max(np.where(zC <= zi2d[icol,:])) + 1)
+        z_new = np.append(zC[:last_idx], zi2d[icol,:])
+        a_new = np.append(a2d[icol, :last_idx], a_zi2d[icol,:])
+        aint[icol,:] = integrate.trapezoid(a_new, z_new)
+    return aint.reshape(leading)
+
+
+def integrate_to_zi(a, zC, a_zi, zi):
+    return xr.apply_ufunc(integrate_to_zi_ufunc, zi, zC, a_zi, a,
+                          input_core_dims=[[], ['zC'], [], ['zC']],
+                          output_core_dims=[[]],
+                          output_dtypes=[float],
+                          dask='parallelized',
+                          vectorize=False)
+
+
+def interp1d_ufunc(zi, z, a):
+    leading = a.shape[:-1]
+    nz      = a.shape[-1]
+    ncols   = int(np.prod(leading)) if leading else 1
+    a2d     = a.reshape(ncols, nz)
+    zi2d    = zi.reshape(ncols, 1)
+    a_at_zi = np.full((ncols, 1), np.nan)
+    for icol in range(ncols):
+        a_at_zi[icol,:] = np.interp(zi2d[icol,:], z, a2d[icol,:])
+    return a_at_zi.reshape(leading)
+
+
 def interp_to_zi(a, zi):
-    return xr.apply_ufunc(np.interp, zi, a.zC, a,
+    return xr.apply_ufunc(interp1d_ufunc, zi, a.zC, a,
                           input_core_dims=[[], ['zC'], ['zC']],
                           output_core_dims=[[]],
                           output_dtypes=[float],
                           dask='parallelized',
-                          vectorize=True)
+                          vectorize=False)
 
 
 def front_boundary_ufunc(M, x, Mc=0.2, in_km=0.1, out_km=0.1):

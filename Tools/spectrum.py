@@ -12,10 +12,12 @@ except ImportError:
 
 
 class TWODimensional_spec(object):
-    """ A class that represents a two dimensional spectrum
-            for real signals """
+    """
+    A class that represents a two dimensional spectrum for real signals 
+    Source: https://github.com/pyspec/pyspec/blob/master/pyspec/spectrum.py
+    """
 
-    def __init__(self, phi, d1, d2, detrend=True):
+    def __init__(self, phi, d1, d2, detrend='linear'):
 
         self.phi = phi  # two dimensional real field
         self.d1 = d1
@@ -24,9 +26,9 @@ class TWODimensional_spec(object):
         self.L1 = d1*self.n1
         self.L2 = d2*self.n2
 
-        if detrend:
-            self.phi = signal.detrend(self.phi, axis=(-1), type='linear')
-            self.phi = signal.detrend(self.phi, axis=(-2), type='linear')
+        if detrend is not None:
+            self.phi = signal.detrend(self.phi, axis=(-1), type=detrend)
+            self.phi = signal.detrend(self.phi, axis=(-2), type=detrend)
         else:
             pass
 
@@ -116,7 +118,7 @@ def calc_ispec(k, l, E, ndim=2):
     wv = np.sqrt(k**2 + l**2)
 
     # ignore Nyquist frequency, which is located at the negative side for numpy
-    if k.max()>l.max():
+    if k.max() > l.max():
         kmax = l.max()
     else:
         kmax = k.max()
@@ -140,6 +142,66 @@ def calc_ispec(k, l, E, ndim=2):
             Er[i] = np.trapz(E[:,fkr]*wv[fkr][None,:], dx=dth)
 
     return kr, Er.squeeze()
+
+
+def get_hori_spec_ufunc(phi, dx, dy, dkr, kr, detrend='linear'):
+    if detrend is not None:
+        phi = signal.detrend(phi, axis=(-1), type=detrend)
+        phi = signal.detrend(phi, axis=(-2), type=detrend)
+    else:
+        pass
+    ny, nx = phi.shape
+    Lx, Ly = dx*nx, dy*ny
+    winx = np.hanning(nx)
+    winx = np.sqrt(nx / (winx**2).sum())*winx
+    winy = np.hanning(ny)
+    winy = np.sqrt(ny / (winy**2).sum())*winy
+    win = winx[np.newaxis, ...] * winy[..., np.newaxis]
+    phi *= win
+
+    kx = np.fft.fftshift( np.fft.fftfreq(nx, dx) )
+    ky = np.fft.fftshift( np.fft.fftfreq(ny, dy) )
+    kkx, kky = np.meshgrid(kx, ky)
+    wvn = np.sqrt(kkx**2 + kky**2)
+
+    phih = np.fft.fft2(phi)
+    spec = (phih*phih.conj()).real * (dx*dy)**2 / (Lx*Ly)
+    spec = np.fft.fftshift(spec)
+
+    Er = np.zeros(kr.size)
+    for j in range(kr.size):
+        fkr = (wvn > kr[j]-dkr/2) & (wvn <= kr[j]+dkr/2)
+        dtheta = 2*pi / (fkr.sum()-1)
+        Er[j] = np.trapz(spec[fkr]*wvn[fkr], dx=dtheta)
+    return Er.squeeze()
+
+
+def get_hori_spec(ds, vars_spec):
+    dx = (ds.xF[1] - ds.xF[0]).data
+    dy = (ds.yF[1] - ds.yF[0]).data
+    ny = ds.sizes['yC']
+    nx = ds.sizes['xC']
+    kx = np.fft.fftshift( np.fft.fftfreq(nx, dx) )
+    ky = np.fft.fftshift( np.fft.fftfreq(ny, dy) )
+
+    dkx = np.abs(kx[2] - kx[1])
+    dky = np.abs(ky[2] - ky[1])
+    dkr = np.sqrt(dkx**2 + dky**2)
+    # ignore Nyquist frequency, which is located at the negative side for numpy
+    kr_max = np.minimum(kx.max(), ky.max())
+    kr = np.arange(dkr/2, kr_max-dkr/2, dkr)
+
+    list_spec = []
+    for var in vars_spec:
+        tmp_spec = xr.apply_ufunc(get_hori_spec_ufunc, ds[var], dx, dy, dkr, kr,
+                                  input_core_dims=[['yC', 'xC'], [], [], [], ['wavenumber']],
+                                  output_core_dims=[['wavenumber']],
+                                  output_dtypes=[float],
+                                  dask='parallelized',
+                                  vectorize=True)
+        list_spec.append(tmp_spec)
+    ds_spec = xr.merge(list_spec)
+    return ds_spec.assign_coords(dict(wavenumber=('wavenumber', kr)))
 
 
 def Gaussian_filter_2d(da, cutoff, dims, truncate=3, **kwargs):

@@ -21,8 +21,8 @@ function parse_command_line_arguments()
             help = "Flag for spinup run"
             action = :store_true
 
-        "--init_tracer"
-            help = "Flag for option to initialize tracer"
+        "--tra_inv"
+            help = "Flag for initializing tracers for inversion"
             action = :store_true
 
         "--nday"
@@ -31,7 +31,7 @@ function parse_command_line_arguments()
 
         "--outdir"
             help = "Path of directory to save outputs under"
-            default = "/glade/derecho/scratch/zhihuaz/TracerInversion/Output"
+            default = "/glade/derecho/scratch/zhihuaz/TracerInversion/Output/regular-res"
             arg_type = String
     end
     return parse_args(settings)
@@ -45,7 +45,7 @@ end
 casename = args["casename"]
 spinup   = args["spinup"]
 outdir   = args["outdir"]
-init_tracer  = args["init_tracer"]
+tra_inv  = args["tra_inv"]
 
 
 ###########-------- SIMULATION PARAMETERS ----------------#############
@@ -54,7 +54,7 @@ include("simparams.jl")
 groupname = ifelse(startswith(casename, 'd'), "DoubleFront",
                    startswith(casename, 'c') ? "Channel" : "FrontalZone")
 pm = getproperty(SimParams(), Symbol(groupname))
-pm = enrich_parameters(pm, casename, spinup, init_tracer)
+pm = enrich_parameters(pm, casename, spinup, tra_inv)
 
 stop_time = args["nday"] == nothing ? pm.stop_time : args["nday"] * 1days
 basename  = SubString(casename, 1:19)
@@ -64,9 +64,7 @@ ckpdir    = replace(outdir, "Output" => "Restart") * "/" * pm.ckp_group * "/" * 
 ###########-------- GRID SET UP ----------------#############
 @inline h(k)  = (k - 1) / pm.Nz
 @inline ζ₀(k) = 1 + (h(k) - 1) / pm.z_refinement
-#@inline ζₘ(k) = (1 - tanh((h(k) - 0.2) / 0.3)) / 10
 @inline ζ₁(k) = (1 - exp(-pm.z_stretching * h(k))) / (1 - exp(-pm.z_stretching))
-#@inline z_faces(k) = pm.Lz * ((ζ₀(k) + ζₘ(k)) * ζ₁(k) - 1)
 @inline z_faces(k) = pm.Lz * (ζ₀(k) * ζ₁(k) - 1)
 
 zgrid = ifelse(pm.use_stretched_z, z_faces, (-pm.Lz, 0))
@@ -80,7 +78,8 @@ grid = RectilinearGrid(GPU(),
 
 
 ###########-------- INITIAL & BOUNDARY CONDITIONS -----------------#############
-@inline tracer_like_nutrient(x, y, z) = (1 - tanh(3 * (z + pm.Hm))) / 2
+@inline tracer_like_chlorophyll(x, y, z) = (1 + tanh(5 * (z + 10))) / 2
+@inline tracer_like_nutrient(x, y, z) = (1 - tanh(10 * (z + 20))) / 2
 @inline linear_surface_tracer_flux(x, y, t, c8) = - 1e-3 * (1 - c8)
 @inline b_vertical(z) = pm.N₁² * (z + pm.Lz) + (pm.N₀² - pm.N₁²) * max(z + pm.Hm, 0)
 @inline heaviside(z)  = ifelse(z < 0, zero(z), one(z))
@@ -97,8 +96,8 @@ Random.seed!(pm.em)
 
 # same gradient magnitude for all tracers
 @inline tracer_horizontal(x, y, z, p) = sin(π * ((p.i + 1) * x / p.Lx + 1/2))# / (p.i + 1)
-@inline tracer_vertical(x, y, z, p) = sin(π * (p.i/2 * z / p.Hm))# + sin(π * ((p.i - 1) * x / p.Lx + 1/2))
-@inline function tracer_IC(x, y, z, p)
+@inline tracer_vertical(x, y, z, p) = sin(π * (p.i/2 * z / p.Hm)) * (2*filament_horizontal(x) - 1)# + sin(π * ((p.i - 1) * x / p.Lx + 1/2))
+@inline function tracer_for_inversion(x, y, z, p)
     return isodd(p.i) ? tracer_horizontal(x, y, z, p) : tracer_vertical(x, y, z, p)
 end
 
@@ -111,29 +110,29 @@ b_bcs = FieldBoundaryConditions(top = FluxBoundaryCondition(pm.B₀),
 if pm.use_fluxed_c & (!spinup)
     c8_bcs = FieldBoundaryConditions(top = FluxBoundaryCondition(linear_surface_tracer_flux, field_dependencies=:c8),
                                      bottom = FluxBoundaryCondition(0)) 
-#    c9_bcs = FieldBoundaryConditions(top = FluxBoundaryCondition(pm.B₀),
-#                                     bottom = GradientBoundaryCondition(pm.N₁²))
-    all_bcs = (u=u_bcs, v=v_bcs, b=b_bcs, c8=c8_bcs)#, c9=c9_bcs)
+    all_bcs = (u=u_bcs, v=v_bcs, b=b_bcs, c8=c8_bcs)
 else
     all_bcs = (u=u_bcs, v=v_bcs, b=b_bcs)
 end
 
-###########-------- SPONGE LAYER -----------------#############
+###########-------- SPONGE LAYER & FORCING -----------------#############
 #@inline target_v(x, y, z, t) = Vg(x, z)
 #@inline target_b(x, y, z, t) = b_vertical(z)
+@inline age_forcing(x, y, z, t) = 1
 target_b = LinearTarget{:z}(intercept=pm.N₁²*pm.Lz, gradient=pm.N₁²)
 bottom_mask = GaussianMask{:z}(center=-pm.Lz, width=pm.sponge_σ)
 uvw_sponge = Relaxation(rate=pm.damping_rate, mask=bottom_mask, target=0)
 #v_sponge  = Relaxation(rate=pm.damping_rate, mask=bottom_mask, target=target_v)
 b_sponge   = Relaxation(rate=pm.damping_rate, mask=bottom_mask, target=target_b)
 sponge_forcing = (u=uvw_sponge, v=uvw_sponge, w=uvw_sponge, b=b_sponge)
+#all_forcing = (u=uvw_sponge, v=uvw_sponge, w=uvw_sponge, b=b_sponge, c9=age_forcing)
 
 
 ###########-------- DEFINE MODEL ---------------#############
 closure_sgs = SmagorinskyLilly()#nothing
 passive_tracers = ifelse(spinup, [],
-                         ifelse(pm.use_fluxed_c, [Symbol(:c, i) for i in pm.n_tracers:(pm.n_tracers+1)],
-                                [Symbol(:c, i) for i in 1:pm.n_tracers]))
+                         ifelse(tra_inv, [Symbol(:c, i) for i in 1:pm.n_tracers],
+                                [Symbol(:c, i) for i in 8:8]))
 
 model = NonhydrostaticModel(; grid,
                             coriolis = FPlane(f=pm.f),
@@ -144,34 +143,36 @@ model = NonhydrostaticModel(; grid,
                             closure = closure_sgs,
                             advection = WENO(order=5))
 
-if spinup
-    @info "Start from noise...."
-    set!(model, u=uᵢ, v=vᵢ, b=bᵢ)
-else
+if pm.pickup
     @info "Restart from checkpoint file...."
     all_ckp   = split(read(`ls $ckpdir -1v`, String))
     ckp_list  = filter(s -> startswith(s, pm.pickup_prefix), all_ckp)
     ckp_fpath = ckpdir * "/" * ckp_list[pm.pickup_idx]
     set!(model, ckp_fpath)
+else
+    @info "Start from noise...."
+    set!(model, u=uᵢ, v=vᵢ, b=bᵢ)
+end
 
-    if init_tracer
-        @info "Initialize tracer...."
+if tra_inv
+    @info "Initialize tracers for inversion...."
 
-        @info "Set tracer c$(pm.n_tracers) distribution...."
-        eval(Meta.parse("set!(model, c$(pm.n_tracers) = (x, y, z) -> tracer_like_nutrient(x, y, z))"))
+    for i in 1:pm.n_tracers
+        tracer_params = (; pm.Lx, pm.Ly, pm.Lz, pm.Lf, pm.Lp, pm.Hm, i)
+        @info "Set tracer c$i distribution...."
+        eval(Meta.parse("set!(model, c$i = (x, y, z) -> tracer_for_inversion(x, y, z, $tracer_params))"))
+    end
+elseif spinup
+    @info "Skip tracer initialization...."
+else
+    @info "Initialize surface tracers..."
 
-        if pm.use_fluxed_c
-            @info "Set tracer c8 distribution...."
-            set!(model, c8=0)
-        else
-            for i in 1:(pm.n_tracers - 1)
-                tracer_params = (; pm.Lx, pm.Ly, pm.Lz, pm.Lf, pm.Lp, pm.Hm, i)
-                @info "Set tracer c$i distribution...."
-                eval(Meta.parse("set!(model, c$i = (x, y, z) -> tracer_IC(x, y, z, $tracer_params))"))
-            end
-        end
-    else
-        @info "Tracer already initialized...."
+    #@info "Set tracer c7 distribution...."
+    #eval(Meta.parse("set!(model, c7 = (x, y, z) -> tracer_like_nutrient(x, y, z))"))
+
+    if pm.use_fluxed_c
+        @info "Set tracer c8 distribution...."
+        set!(model, c8=0)
     end
 end
 
@@ -194,7 +195,7 @@ wall_clock = Ref(time_ns())
 
     return nothing
 end
-add_callback!(simulation, print_progress, IterationInterval(50))
+add_callback!(simulation, print_progress, IterationInterval(100))
 
 
 ###########-------- DIAGNOSTICS --------------#############
@@ -203,21 +204,22 @@ include("diagnostics.jl")
 global_attributes = Dict(pairs(map(bool2int, pm)))
 
 if pm.save_mean
-    outputs_field, outputs_mean = get_outputs(model, pm.save_mean)
+    outputs_field, outputs_mean = get_outputs(model, pm.save_mean, tra_inv)
     ixm = round(Int, pm.Nx/2)
     ixl = round(Int, pm.Nx/4)
+    #kz5 = ifelse(pm.coarsen_h == 1, 115, 76) # fine-res
+    kz5 = ifelse(pm.coarsen_h == 1, 91, 60) # regular-res
     slicers = (; xmid  = (ixm, :, :),
-                 xfcl  = (ixl, : ,:),
-                 south = (:, 1, :),
-                 mlb   = (:, :, 28),
-                 top   = (:, :, 58))
+                 xfcl  = (ixl, :, :),
+                 south = (:,   1, :),
+                 top   = (:,   :, kz5))
     for side in keys(slicers)
         indices = slicers[side]
         simulation.output_writers[side] = NetCDFOutputWriter(model, outputs_field;
                                                              filename = pm.output_prefix * "_$(side).nc",
                                                              dir = outdir,
                                                              global_attributes = global_attributes,
-                                                             schedule = TimeInterval(pm.save_out_interval),
+                                                             schedule = TimeInterval(pm.output_interval),
                                                              overwrite_existing = true,
                                                              indices = indices)
     end
@@ -226,16 +228,16 @@ if pm.save_mean
                                                               filename = pm.output_prefix * "_averages.nc",
                                                               dir = outdir,
                                                               global_attributes = global_attributes,
-                                                              schedule = TimeInterval(pm.save_out_interval),
+                                                              schedule = TimeInterval(pm.output_interval),
                                                               overwrite_existing = true)
 
 else
-    outputs_field = get_outputs(model, pm.save_mean)
+    outputs_field = get_outputs(model, pm.save_mean, tra_inv)
     simulation.output_writers[:state] = NetCDFOutputWriter(model, outputs_field;
                                                            filename = pm.output_prefix * "_state.nc",
                                                            dir = outdir,
                                                            global_attributes = global_attributes,
-                                                           schedule = TimeInterval(pm.save_out_interval),
+                                                           schedule = TimeInterval(pm.output_interval),
                                                            overwrite_existing = true)
 end
 
@@ -243,7 +245,7 @@ end
 #                                                         filename = fn_prefix * "_averages.nc",
 #                                                         dir = outdir,
 #                                                         global_attributes = global_attributes,
-#                                                         schedule = TimeInterval(pm.save_out_interval),
+#                                                         schedule = TimeInterval(pm.output_interval),
 #                                                         overwrite_existing = true)
 
 if pm.save_ckp 
@@ -257,7 +259,7 @@ if pm.save_ckp
     else
         mkpath(ckpdir)
     end
-    simulation.output_writers[:checkpointer] = Checkpointer(model, schedule=TimeInterval(pm.save_ckp_interval),
+    simulation.output_writers[:checkpointer] = Checkpointer(model, schedule=TimeInterval(pm.ckp_interval),
                                                             dir=ckpdir, prefix=pm.ckp_prefix)
 end
 

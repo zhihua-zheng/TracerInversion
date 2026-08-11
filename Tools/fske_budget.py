@@ -12,7 +12,7 @@ from xgcm import Grid
 from mixdiag import double_front_boundary, get_bld_Rib, get_mld_PE_anomaly
 
 
-def Ifske_budget_without_VSPuv(ds, filter_taper, dxF, dyF, dzF, grid):
+def Ifske_budget_without_VSPuv(ds, filter_gauss, dxF, dyF, dzF, grid):
     uu = ds.u * ds.u
     uv = ds.u * ds.v
     uw = ds.u * ds.w
@@ -38,10 +38,10 @@ def Ifske_budget_without_VSPuv(ds, filter_taper, dxF, dyF, dzF, grid):
     wc.name = 'wc'
     vc.name = 'vc'
     uc.name = 'uc'
-    dsf = xr.merge([uu, uv, uw, vv, vw, ww, wb, vb, ub, wc, vc, uc])
+    cov = xr.merge([uu, uv, uw, vv, vw, ww, wb, vb, ub, wc, vc, uc])
 
-    dsl = filter_taper.apply(ds,  dims=['yC', 'xC'])
-    dsf = filter_taper.apply(dsf, dims=['yC', 'xC'])
+    dsl = filter_gauss.apply(ds,  dims=['yC', 'xC'])
+    dsf = filter_gauss.apply(cov, dims=['yC', 'xC'])
     dsf['uu'] = dsf.uu - (dsl.u * dsl.u)
     dsf['uv'] = dsf.uv - (dsl.u * dsl.v)
     dsf['uw'] = dsf.uw - (dsl.u * dsl.w)
@@ -58,8 +58,10 @@ def Ifske_budget_without_VSPuv(ds, filter_taper, dxF, dyF, dzF, grid):
 
     with warnings.catch_warnings():
         warnings.simplefilter('ignore')
-        # b_xf = grid.interp(dsl.b, axis='x').transpose(..., 'xF')
-        # b_yf = grid.interp(dsl.b, axis='y').transpose(..., 'yF')
+        b_xf = grid.interp(dsl.b, axis='x').transpose(..., 'xF')
+        b_yf = grid.interp(dsl.b, axis='y').transpose(..., 'yF')
+        c_xf = grid.interp(dsl.c, axis='x').transpose(..., 'xF')
+        c_yf = grid.interp(dsl.c, axis='y').transpose(..., 'yF')
         u_xf = grid.interp(dsl.u, axis='x').transpose(..., 'xF')
         u_yf = grid.interp(dsl.u, axis='y').transpose(..., 'yF')
         v_xf = grid.interp(dsl.v, axis='x').transpose(..., 'xF')
@@ -67,8 +69,11 @@ def Ifske_budget_without_VSPuv(ds, filter_taper, dxF, dyF, dzF, grid):
         w_xf = grid.interp(dsl.w, axis='x').transpose(..., 'xF')
         w_yf = grid.interp(dsl.w, axis='y').transpose(..., 'yF')
 
-        # dbdx = grid.diff(b_xf, axis='x') / dxF
-        # dbdy = grid.diff(b_yf, axis='y') / dyF
+        dbdx = grid.diff(b_xf, axis='x') / dxF
+        dbdy = grid.diff(b_yf, axis='y') / dyF
+
+        dcdx = grid.diff(c_xf, axis='x') / dxF
+        dcdy = grid.diff(c_yf, axis='y') / dyF
 
         dudx = grid.diff(u_xf, axis='x') / dxF
         dudy = grid.diff(u_yf, axis='y') / dyF
@@ -82,24 +87,29 @@ def Ifske_budget_without_VSPuv(ds, filter_taper, dxF, dyF, dzF, grid):
     dsl['δ']  = dudx + dvdy
     dsl['σₙ'] = dudx - dvdy
     dsl['σₛ'] = dvdx + dudy
-    # dsl['M²'] = np.sqrt(dbdx**2 + dbdy**2)
+    dsl['M²'] = np.sqrt(dbdx**2 + dbdy**2)
 
     dsf['HSP_δ'] = - (dsf.uu + dsf.vv) * dsl['δ']  / 2
     dsf['HSP_σ'] = - (dsf.uu - dsf.vv) * dsl['σₙ'] / 2 - dsf.uv * dsl['σₛ']
     dsf['VSP_w'] = -  dsf.uw * dwdx - dsf.vw * dwdy + dsf.ww * dsl['δ']
 
-    # M2l = dsl['M²'].where(dsl.zC >= -dsl.Hm).mean('zC')/dsl.attrs['M²']
-    # dsl['mask_fz'] = double_front_boundary(M2l, Mc=0.2, in_km=0, out_km=0)
+    dsf['ccHSP'] = - dsf.uc * dcdx - dsf.vc * dcdy
 
-    dsf['Ifske'] = (dsf.fske.transpose(..., 'zC') * dzF).sum('zC')
-    dsf['IVBP']  = (dsf.wb.transpose(..., 'zC')   * dzF).sum('zC')
+    M2l = dsl['M²'].sel(zC=slice(-60, 0)).mean('zC') / 1e-8
+    dsl['is_fz'] = double_front_boundary(M2l, Mc=1, in_km=0, out_km=0)
+
+    dsf['Ifske']  = (dsf.fske.transpose(..., 'zC') * dzF).sum('zC')
+    dsf['Iww']    = (dsf.ww.transpose(..., 'zC')   * dzF).sum('zC')
+    dsf['IVBP']   = (dsf.wb.transpose(..., 'zC')   * dzF).sum('zC')
     dsf['IHSP_δ'] = (dsf['HSP_δ'].transpose(..., 'zC') * dzF).sum('zC')
     dsf['IHSP_σ'] = (dsf['HSP_σ'].transpose(..., 'zC') * dzF).sum('zC')
     dsf['IVSP_w'] = (dsf['VSP_w'].transpose(..., 'zC') * dzF).sum('zC')
 
-    var_dsl_to_save   = ['u', 'v', 'w', 'b', 'c', 'xF', 'yF', 'zF'] #'mask_fz',
+    dsf['IccHSP'] = (dsf['ccHSP'].transpose(..., 'zC') * dzF).sum('zC')
+
+    var_dsl_to_save   = ['u', 'v', 'w', 'b', 'c', 'is_fz', 'xF', 'yF', 'zF']
     var3d_dsf_to_save = ['uu', 'vv', 'ww', 'uv', 'uw', 'vw', 'wb', 'vb', 'ub', 'wc', 'vc', 'uc']
-    var2d_dsf_to_save = ['Ifske', 'IVBP', 'IHSP_δ', 'IHSP_σ', 'IVSP_w']
+    var2d_dsf_to_save = ['Ifske', 'Iww', 'IVBP', 'IHSP_δ', 'IHSP_σ', 'IVSP_w', 'IccHSP']
 
     dsl_save = xr.merge([dsl[var_dsl_to_save], dsf[var3d_dsf_to_save]])
     dsf_save = dsf[var2d_dsf_to_save]
@@ -108,7 +118,7 @@ def Ifske_budget_without_VSPuv(ds, filter_taper, dxF, dyF, dzF, grid):
 
 def main():
     parser = argparse.ArgumentParser(description="""
-             Compute (vertically integrated) fine-scale kinetic energy budget""")
+             Compute vertically integrated finescale kinetic energy budget""")
     parser.add_argument('-c', '--case', action='store', dest='cname',
                         help='Simulation case name')
     parser.add_argument('-hn', '--hour_number', action='store', dest='hour', type=int,
@@ -117,18 +127,18 @@ def main():
 
     # specify file path
     if sys.platform == 'linux' or sys.platform == 'linux2':
-        data_dir = '/glade/derecho/scratch/zhihuaz/TracerInversion/Output/'
+        data_dir = '/glade/derecho/scratch/zhihuaz/TracerInversion/Output/regular-res/'
     elif sys.platform == 'darwin':
         data_dir = '/Users/zhihua/Documents/Work/Research/Projects/TRACE-SEAS/TracerInversion/Data/'
     else:
         print('OS not supported.')
 
-    isubset_z_time = dict(zC=slice(19,None), zF=slice(19,None), time=slice(2,146,3))
+    isubset_z_time = dict(zC=slice(5,None), zF=slice(5,None), time=slice(1,120,2))
     ihr = int(args.hour - 1)
     ds = xr.open_dataset(data_dir + args.cname + '_state.nc', decode_timedelta=True).isel(isubset_z_time).isel(time=slice(ihr, ihr+2)).chunk(time=1, zC=5)
     ds.close()
-    ds = ds.drop_vars(['c7'])
-    ds = ds.rename_vars({'c8': 'c'})
+    ds = ds.rename_vars({'c8': 'c'})#.drop_vars(['eps'], errors='ignore')
+    # ds['F_c'] = -1e-3 * (1 - ds.c.isel(zC=-1))
 
     dxF = (ds.xF[1] - ds.xF[0]).data
     dyF = (ds.yF[1] - ds.yF[0]).data
@@ -138,10 +148,9 @@ def main():
     coords = {dim : periodic_coords[dim] if tpl=='P' else bounded_coords[dim] for dim, tpl in zip('xyz', 'PPN')}
     grid = Grid(ds, coords=coords)
 
-    filter_taper = gcm_filters.Filter(filter_scale=100,
+    filter_gauss = gcm_filters.Filter(filter_scale=150,
                                       dx_min=dxF,
-                                      filter_shape=gcm_filters.FilterShape.TAPER,
-                                      transition_width=np.pi*4,
+                                      filter_shape=gcm_filters.FilterShape.GAUSSIAN,
                                       grid_type=gcm_filters.GridType.REGULAR,
                                      )
     TMPDIR = os.getenv('TMPDIR')
@@ -150,37 +159,40 @@ def main():
 
     with LocalCluster(**cluster_kw) as cluster:
         with Client(cluster) as client:
-            dsl, dsf = Ifske_budget_without_VSPuv(ds, filter_taper, dxF, dyF, dzF, grid)
+            dsl, dsf = Ifske_budget_without_VSPuv(ds, filter_gauss, dxF, dyF, dzF, grid)
             dsf = dsf.persist()
 
-            delayed_nc_dsl = dsl.to_netcdf(data_dir + args.cname + f'/hr{args.hour:02d}_filtered.nc', compute=False)
+            delayed_nc_dsl = dsl.to_netcdf(data_dir + args.cname + f'/hr{args.hour:02d}_Gfiltered.nc', compute=False)
             delayed_nc_dsl.compute()
 
-            dsl = xr.open_dataset(data_dir + args.cname + f'/hr{args.hour:02d}_filtered.nc', decode_timedelta=True).chunk(xC=200, yC=200, time=1)
+            dsl = xr.open_dataset(data_dir + args.cname + f'/hr{args.hour:02d}_Gfiltered.nc', decode_timedelta=True).chunk(xC=200, yC=200, time=1)
             dsl.close()
 
             with warnings.catch_warnings():
                 warnings.simplefilter('ignore')
                 b_zf = grid.interp(dsl.b, axis='z', boundary='extend').transpose(..., 'zF')
+                c_zf = grid.interp(dsl.c, axis='z', boundary='extend').transpose(..., 'zF')
                 u_zf = grid.interp(dsl.u, axis='z', boundary='extend').transpose(..., 'zF')
                 v_zf = grid.interp(dsl.v, axis='z', boundary='extend').transpose(..., 'zF')
 
                 dbdz = grid.diff(b_zf, axis='z') / dzF
+                dc   = grid.diff(c_zf, axis='z')
                 du   = grid.diff(u_zf, axis='z')
                 dv   = grid.diff(v_zf, axis='z')
 
             dsf['IVSP_uv'] = - (dsl.uw.transpose(..., 'zC') * du + dsl.vw.transpose(..., 'zC') * dv).sum('zC')
+            dsf['IccVSP']  = - (dsl.wc.transpose(..., 'zC') * dc).sum('zC')
             dsf['bld'] = get_bld_Rib(dsl.zF, dzF, dsl.b, dsl.u, dsl.v, dbdz, dsl.attrs, Ribc=0.3)
 
             uniform_zF  = np.arange(np.ceil(dsl.zF[0]), 1)
             uniform_zC  = (uniform_zF[:-1] + uniform_zF[1:]) / 2
             uniform_dzF = np.diff(uniform_zF)
-            pe_anomaly  = 0.115*(np.maximum(dsl.attrs['Q₀'], 1) / 1)**(3/2) # for M006 set only
+            pe_anomaly  = 0.15*(np.maximum(dsl.attrs['Q₀'], 1) / 1)**(3/2) # for M006 set only
             dsf['mld']  = get_mld_PE_anomaly(uniform_dzF,
-                                            dsl.b.interp(zC=uniform_zC, kwargs={'fill_value': 'extrapolate'}),
-                                            dsl.attrs, energy=pe_anomaly)
+                                             dsl.b.interp(zC=uniform_zC, kwargs={'fill_value': 'extrapolate'}),
+                                             dsl.attrs, energy=pe_anomaly)
 
-            delayed_nc_dsf = dsf.to_netcdf(data_dir + args.cname + f'/hr{args.hour:02d}_Ifske_budget.nc', compute=False)
+            delayed_nc_dsf = dsf.to_netcdf(data_dir + args.cname + f'/hr{args.hour:02d}_GIfske_budget.nc', compute=False)
             delayed_nc_dsf.compute()
 
 
